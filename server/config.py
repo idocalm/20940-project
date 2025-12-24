@@ -18,7 +18,7 @@ SETTINGS = {
 
 USERS_FILE = "users.json"
 ATTEMPTS_LOG = "attempts.log"
-GROUP_SEED = 331771535 ^ 111111111
+GROUP_SEED = 331771535 ^ 338054042
 
 failed_counts = defaultdict(int)
 lockouts = {}
