@@ -1,0 +1,7 @@
+Flask>=2.3
+passlib[argon2,bcrypt]>=1.7
+argon2-cffi>=23.1
+bcrypt>=4.0
+pyotp>=2.9
+passlib
+zxcvbn
