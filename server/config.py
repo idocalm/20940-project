@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 SETTINGS = {
-    "hash_mode": "argon2id",  # argon2id | bcrypt | sha256
+    "hash_mode": "sha256",
     "bcrypt_cost": 12,
     "pepper_enabled": False,
     "pepper": b"",
