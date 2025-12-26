@@ -5,3 +5,5 @@ bcrypt>=4.0
 pyotp>=2.9
 passlib
 zxcvbn
+requests>=2.31
+psutil>=5.9

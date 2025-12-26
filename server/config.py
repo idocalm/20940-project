@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 SETTINGS = {
-    "hash_mode": "argon2id",  # argon2id | bcrypt | sha256
+    "hash_mode": "sha256",
     "bcrypt_cost": 12,
     "pepper_enabled": False,
     "pepper": b"",
@@ -18,7 +18,7 @@ SETTINGS = {
 
 USERS_FILE = "users.json"
 ATTEMPTS_LOG = "attempts.log"
-GROUP_SEED = 331771535 ^ 111111111
+GROUP_SEED = 331771535 ^ 338054042
 
 failed_counts = defaultdict(int)
 lockouts = {}
