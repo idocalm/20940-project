@@ -1,6 +1,6 @@
 # Server 
 
-## GROUP_SEED: 
+## GROUP_SEED: 132130069
 
 The server supports the following endpoints:
 
