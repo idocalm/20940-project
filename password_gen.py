@@ -1,49 +1,45 @@
-from passlib.pwd import genword
-from zxcvbn import zxcvbn
 from pathlib import Path
+import random
 
 COUNT = 10
-MAX_ATTEMPTS = 10000
 
 BASE = Path("passwords")
 BASE.mkdir(exist_ok=True)
 
-SETS = {
-    # name: (entropy, min_score, max_score)
-    "easy": (20, 0, 1),
-    "medium": (40, 2, 3),
-    "hard": (80, 4, 4),
-}
-
-"""
-The score of each set is between 0-4
-
-0 # too guessable: risky password. (guesses < 10^3)
-1 # very guessable: protection from throttled online attacks. (guesses < 10^6)
-2 # somewhat guessable: protection from unthrottled online attacks. (guesses < 10^8)
-3 # safely unguessable: moderate protection from offline slow-hash scenario. (guesses < 10^10)
-4 # very unguessable: strong protection from offline slow-hash scenario. (guesses >= 10^10)
-"""
+EASY_CHARSET = "abcd0123"  # 8 characters, length 3-4: ~4.6K combinations
+MEDIUM_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # Full alphanumeric
+HARD_CHARSET = MEDIUM_CHARSET  # Full alphanumeric
 
 
-def score(pw):
-    return zxcvbn(pw)["score"]
+def gen_easy_password():
+    """Generate easy password: 3-4 chars from restricted charset"""
+    length = random.randint(3, 4)
+    return "".join(random.choice(EASY_CHARSET) for _ in range(length))
 
 
-for name, (entropy, min_s, max_s) in SETS.items():
+def gen_medium_password():
+    """Generate medium password: 5-6 chars from full alphanumeric"""
+    length = random.randint(5, 6)
+    return "".join(random.choice(MEDIUM_CHARSET) for _ in range(length))
+
+
+def gen_hard_password():
+    """Generate hard password: 8-10 chars from full alphanumeric"""
+    length = random.randint(8, 10)
+    return "".join(random.choice(HARD_CHARSET) for _ in range(length))
+
+
+# Generate passwords for each difficulty
+for name, gen_func in [("easy", gen_easy_password), ("medium", gen_medium_password), ("hard", gen_hard_password)]:
     out = BASE / f"{name}_passwords.txt"
     passwords = []
-    attempts = 0
 
+    # Generate COUNT unique passwords
+    seen = set()
     while len(passwords) < COUNT:
-        if attempts >= MAX_ATTEMPTS:
-            raise RuntimeError(f"Cannot satisfy zxcvbn constraints for {name}")
-
-        pw = genword(entropy=entropy)
-        s = score(pw)
-        attempts += 1
-
-        if min_s <= s <= max_s:
+        pw = gen_func()
+        if pw not in seen:
+            seen.add(pw)
             passwords.append(pw)
 
     out.write_text("\n".join(passwords) + "\n")

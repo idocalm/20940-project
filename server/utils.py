@@ -13,6 +13,17 @@ rate_limited = defaultdict(deque)
 
 
 def log_attempt(entry):
+    def normalize(obj):
+        if isinstance(obj, bytes):
+            return obj.hex()
+        if isinstance(obj, dict):
+            return {k: normalize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [normalize(v) for v in obj]
+        return obj
+
+    entry = normalize(entry)
+
     with open(ATTEMPTS_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 

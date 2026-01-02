@@ -1,160 +1,334 @@
-# Server 
+# DOCS
 
-## GROUP_SEED: 132130069
+This project consists of three main components:
 
-The server supports the following endpoints:
+1. **Authentication Server** (`server/`): A Flask-based web server implementing popular authentication security measures
+2. **Attack Tools** (`attacks/`): Automated tools for simulating bruteforce and password spray attacks
+3. **Experiment Runner** (`run_experiments.py`): Orchestrates testcases, manages server lifecycle, and collects results
 
-1. `/register` - 
-2. `/login` - 
-3. `/login_totp` -
+### Features
 
-## SETTINGS
-- `hash_mode` 
-    = argon2id | bcrypt | sha256
-    Password hashing algorithm that is used for all users
-- `bcrypt_cost`
-    = default at 12 
-    bcrypt work factor (rounds), only used if hash_mode == "bcrypt"
-- `pepper_enabled`
-    Whether a global secret peppr is mixed into password hashing. If false, pepper is never read or used anywhere. 
-- `pepper`
-    bytes, secret added when pepper_enabled is True. 
+- Multiple password hashing algorithms (SHA256, bcrypt, Argon2id)
+- Security mitigations: Rate limiting, Account lockout, CAPTCHA, TOTP (2FA), Pepper
+- Automated attack simulation with metrics collection
 
-## CAPTCHA
-- `captcha_enabled` - If true, enables CAPTCHA enforcment after X failures. 
-- `captcha_after_fails` - Number of failed login attempts before CAPTCHA is required. Only used if captcha_enabled = True. 
+## Project Structure
 
-Captcha protects against automated login attempts or brute-force attacks, and reduces risk of password guessing. It's activated after repeated failed login attempts (exactly `SETTINGS["captcha_after_fails"]`)
+```
+project/
+├── server/
+│   ├── server.py             # Main Flask application and API endpoints
+│   ├── storage.py            # Database class for user management
+│   ├── utils.py              # Security utilities (hashing, rate limiting, etc.)
+│   ├── config.py             # Server configuration settings
+│   ├── server.db             # SQLite database (created at runtime)
+│   └── requests.log          # HTTP request/response logs
+│
+├── attacks/
+│   ├── testcase.py           # TestCase dataclass definition
+│   ├── bruteforce.py         # Bruteforce attack implementation
+│   ├── password_spray.py     # Password spray attack implementation
+│   ├── password_generator.py # Dynamic password generation for bruteforce
+│   ├── config_manager.py     # Server configuration management via API
+│   └── metrics.py            # Attack metrics collection and reporting
+│
+├── passwords/
+│   ├── easy_passwords.txt    # Easy difficulty passwords (4 chars)
+│   ├── medium_passwords.txt  # Medium difficulty passwords (7 chars)
+│   └── hard_passwords.txt    # Hard difficulty passwords (14 chars)
+│
+├── results/
+│   └── {testcase_name}/      # Per-testcase results directory
+│       ├── config.json       # Server configuration used
+│       ├── requests.log      # HTTP request/response logs
+│       └── attempts.log       # Login attempt logs
+│
+├── run_experiments.py         # Main experiment orchestrator - THIS IS WHAT WE RUN
+├── password_gen.py            # Password set generation script - USE THIS TO GENERATE PASSWORDS
+├── requirements.txt
+└── README.md
+```
 
-Server behavior - 
-1. CAPTCHA is optional, its controlled by `SETTINGS["captcha_after_fails"]`
-2. Once a user exceeds the failure threshold:
-    - `/login` responds with `{"captcha_required": true}`
-    - The server expects the client to provide a valid CAPTCHA token to proceed
-3. CAPTCHA tokens are derived via HMAC using the global pepper and a group seed from `/admin/captcha_token`. 
+## Server Implementation
 
-Flow - 
-1. User enters username + password
-2. If failed attempts < threshold - normal login
-3. If failed attempts >= threshold - receives a CAPTCHA challenge.
-4. User solves CAPTCHA (via `/admin/captcha_token`) and sbumits along with credentials
-5. If CAPTCHA is correct, login proceeds
+### Architecture
 
-## Account Lockout 
-- `lockout_enabled` - Enables temporary account lockout after failures. 
-- `lockout_threshold` - How many failed login attempts are required to trigger lockout. 
-- `lockout_time` - int (seconds), duration of lockout window
+**Endpoints:**
 
-## Rate Limiting
-- `rate_limit_enabled` - Enables per-IP rate limiting
-- `rate_limit_window` - Sliding window size
-- `rate_limit_max` - Max requests per window per IP
+- `POST /register` - User registration
+- `POST /login` - User authentication
+- `POST /login_totp` - TOTP token verification
+- `GET /admin/captcha_token` - CAPTCHA token generation
+- `POST /admin/config` - Update server configuration
+- `GET /admin/config` - Get current server configuration
 
-## TOTP (2FA)
-- `totp_enabled` - Globally enable/disable the TOTP support
+#### `storage.py` - Database Layer
 
-Purpose - Add a 2FA to accounts, protect against password theft: even if a password is compromised, login requires the TOTP code. 
+```sql
+CREATE TABLE users (
+    username TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    salt TEXT,
+    totp_secret TEXT
+)
+```
 
-TOTP is again optional, controlled by `SETTINGS["totp_enabled"]`. The user enables it at registration by passing `totp: true`. The server would then generate a TOTP secret. 
+#### `config.py` - Configuration
 
-On login:
-1. If TOTP is enabled for the user `/login` would respond with `{"totp_required": true}`
-2. User then must call `/login_totp` with 6 digit code generated from the secret.
-
-Server uses the standard TOTP algorithm (RFC 6238) which is time-based and changes every 30 seconds. 
-
-## User Storage in `users.json`:
-For any user, we store the hash, salt and totp_secret, if such exists (totp is enabled in settings, and user registered with `totp=True`):
-```json
-{
-  "username": {
-    "hash": "...",
-    "salt": "...",
-    "totp_secret": "..."
-  }
+```python
+SETTINGS = {
+    "hash_mode": "sha256",           # sha256 | bcrypt | argon2id
+    "bcrypt_cost": 12,               # bcrypt rounds
+    "pepper_enabled": False,         # Enable global pepper
+    "pepper": b"",                   # Global secret pepper
+    "captcha_enabled": False,        # Enable CAPTCHA
+    "captcha_after_fails": 5,        # Failures before CAPTCHA
+    "lockout_enabled": False,        # Enable account lockout
+    "lockout_threshold": 10,         # Failures before lockout
+    "lockout_time": 300,             # Lockout duration (seconds)
+    "rate_limit_enabled": False,     # Enable rate limiting
+    "rate_limit_window": 60,         # Rate limit window (seconds)
+    "rate_limit_max": 30,            # Max requests per window
+    "totp_enabled": False,           # Enable TOTP support
 }
 ```
 
-## API - server.py
+## Attacks
+
+### TestCase System
+
+**`testcase.py`** - TestCase Dataclass
+
+Defines the structure for experiment testcases:
+
+```python
+@dataclass
+class TestCase:
+    name: str                                    # Unique testcase identifier
+    testcase_type: Literal["bruteforce", "password_spray"]
+    server_config: Dict                         # Server configuration dict
+    difficulty: str = "easy"                     # easy | medium | hard
+    hash_mode: str = "sha256"                    # sha256 | bcrypt | argon2id
+    max_attempts: Optional[int] = None           # Max attempts (None = unlimited)
+    delay: float = 0.01                          # Delay between attempts (seconds)
+```
+
+### Bruteforce Attack
+
+**`bruteforce.py`** - BruteforceAttack Class
+
+- Generates passwords
+- Tries passwords systematically against a single target user
+- Handles rate limiting, lockout, and CAPTCHA responses
+
+### Password Spray Attack
+
+**`password_spray.py`** - PasswordSprayAttack Class
+
+- Tests each password against multiple users
+- Handles account lockouts and rate limiting
+
+### Password Generator ---- attacker side
+
+Please note how this generator is not related to the `password_gen.py` script, which is used by the admin (us)
+and not the attacker
+
+**`password_generator.py`** - PasswordGenerator Class
+
+- Generates passwords dynamically for bruteforce attacks
+- Tries entire solution space systematically
+
+### Metrics Collection
+
+- Total attempts, successful attempts, failed attempts
+- Total time, attempts per second
+- Time to breach (first successful login)
+- Success rate percentage
+- Latency statistics (avg, min, max)
+- CPU and memory usage samples
+
+Format example:
+
+```json
+{
+  "experiment": "testcase_name",
+  "timestamp": "2024-01-01T12:00:00",
+  "total_attempts": 1000,
+  "successful_attempts": 1,
+  "failed_attempts": 999,
+  "total_time_seconds": 10.5,
+  "attempts_per_second": 95.24,
+  "time_to_breach_seconds": 8.3,
+  "success_rate": 0.1,
+  "avg_latency_ms": 10.5,
+  "min_latency_ms": 5.0,
+  "max_latency_ms": 50.0,
+  "avg_cpu_percent": 15.2,
+  "avg_memory_mb": 128.5,
+  "breached": true
+}
+```
+
+## Experiment Runner
+
+The runner flow is like this: 
+
+1. **Server starts**
+2. **For each testcase:**
+   - Clear log files
+   - Update server configuration via API
+   - Register test users
+   - Execute attack (bruteforce or password spray)
+   - Collect metrics
+   - Save report and artifacts
+3. **Server Shutdown**
+
+### Installation
+
+Running password_gen.py also creates the passwords...
+
+```bash
+pip install -r requirements.txt
+python password_gen.py 
+```
+
+### Running Experiments
+
+```bash
+python server/server.py
+python run_experiments.py
+```
+
+### Defining new testcases
+
+Edit `define_testcases()` in `run_experiments.py`:
+
+```python
+def define_testcases() -> List[TestCase]:
+    testcases = [
+        TestCase(
+            name="bruteforce_easy_sha256_no_protections",
+            testcase_type="bruteforce",
+            difficulty="easy",
+            hash_mode="sha256",
+            server_config={
+                "hash_mode": "sha256",
+                "rate_limit_enabled": False,
+                # ... other settings
+            },
+            delay=0.01,
+            max_attempts=50000,
+        ),
+        # Add more testcases...
+    ]
+    return testcases
+```
+
+## API Documentation
 
 ### POST /register
-Request json should look like:
+
+Register a new user account.
+
+**Request:**
+
 ```json
 {
   "username": "string",
   "password": "string",
-  "totp": true
+  "totp": false
 }
 ```
-This endpoint creates a user entry in users.json, Hashes the password using the server settings, and generates and stores a TOTP secret if enabled and also requested.
 
-Errors - 400 exists, username already exists.
+**Response:**
+
+- `200 OK`: `{"status": "OK"}`
+- `400 Bad Request`: `{"error": "user exists"}`
+
 
 ### POST /login
+
+Authenticate a user.
+
+**Request:**
+
 ```json
 {
   "username": "string",
-  "password": "string",
+  "password": "string"
 }
 ```
 
-Enforcement order: (if enabled)
-1. Rate limit
-2. Lockout
-3. Password verification
-4. TOTP requirement
-5. CAPTCHA requirement
+**Responses:**
 
-Responses:
-
-`{"success": true}`
-`{"totp_required": true}`
-`{"captcha_required": true}`
-`{"error": "rate_limited"}`
-`{"error": "locked"}`
+- `200 OK`: `{"success": true}` - Login successful
+- `200 OK`: `{"success": false}` - Invalid credentials
+- `200 OK`: `{"totp_required": true}` - TOTP code required
+- `403 Forbidden`: `{"captcha_required": true}` - CAPTCHA required
+- `403 Forbidden`: `{"error": "locked"}` - Account locked
+- `429 Too Many Requests`: `{"error": "rate_limited"}` - Rate limited
 
 
 ### POST /login_totp
+
+Verify TOTP token for two-factor authentication.
+
+**Request:**
+
 ```json
 {
   "username": "string",
   "token": "123456"
 }
 ```
-1. Verifies TOTP token
-2. resets failure counter on success 
 
+**Response:**
+
+- `200 OK`: `{"success": true}` - Token valid
+- `200 OK`: `{"success": false}` - Token invalid
+- `400 Bad Request`: `{"error": "invalid"}` - User or TOTP not configured
 
 ### GET /admin/captcha_token
-- Query parameters - `group_seed`
 
-Response:
+Generate CAPTCHA token.
+
+**Param:**
+
+- `group_seed`: Group seed value
+
+**Response:**
+
+- `200 OK`: `{"token": "hex_hmac_string"}`
+- `400 Bad Request`: `{"error": "missing group_seed"}`
+- `400 Bad Request`: `{"error": "incorrect group_seed"}`
+
+### POST /admin/config
+
+Update server configuration dynamically.
+
+**Request:**
+
 ```json
 {
-  "token": "hex_hmac"
+  "hash_mode": "bcrypt",
+  "rate_limit_enabled": true,
+  "rate_limit_max": 30
 }
 ```
-1. Generates CAPTCHA proof token, based on server pepper
 
-## Experiments 
-Every experiment needs to log:
+**Response:**
 
-1. Total attempts
-2. Total time
-3. Attempts per second 
-4. Time to breach
-5. Succcess rate
-6. Latency
-7. CPU / Memory Usage
+- `200 OK`: `{"status": "OK", "settings": {...}}`
+- `400 Bad Request`: `{"error": "unknown setting: key"}`
 
-# Creating password sets
+This updates `SETTINGS` dictionary in memory
 
-The python script `password_gen.py` is used to generate the 3 sets of passwords we need - easy medium and hard
+### GET /admin/config
 
-We do this with the library `passlib` and `zxcvbn`. The library passlib generates the password based on an entropy field that defines how strong they are. 
+Get current server configuration.
 
-The latter can give us an estimation of how strong a password is, from 0 to 4. 
+**Response:**
 
-Easy passwords are rated between 0 and 1 
-Medium passwords are rated between 2 and 3
-Hard are rated as 4
+- `200 OK`: `{"settings": {...}}`
+
+Returns current `SETTINGS` dictionary
