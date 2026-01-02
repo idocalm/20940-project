@@ -110,6 +110,7 @@ class TestCase:
     difficulty: str = "easy"                     # easy | medium | hard
     hash_mode: str = "sha256"                    # sha256 | bcrypt | argon2id
     max_attempts: Optional[int] = None           # Max attempts (None = unlimited)
+    max_time: Optional[float] = None  # None means no time limit, value in seconds
     delay: float = 0.01                          # Delay between attempts (seconds)
 ```
 

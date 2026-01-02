@@ -16,6 +16,7 @@ class BruteforceAttack:
         metrics: AttackMetrics = None,
         delay: float = 0.01,
         max_attempts: int = None,
+        max_time: float = None,
     ):
         """
         Bruteforce attack on a user
@@ -26,20 +27,29 @@ class BruteforceAttack:
             metrics: AttackMetrics object for data collection
             delay: delay between each attempt (in seconds)
             max_attempts: maximum number of attempts (None = try entire solution space)
+            max_time: maximum time in seconds (None = no time limit)
         """
         password_generator = PasswordGenerator(
             difficulty=difficulty, max_attempts=max_attempts
         )
 
+        max_time_str = f"{max_time}s" if max_time else "unlimited"
+        max_attempts_str = str(max_attempts) if max_attempts else "unlimited"
         print(
-            f"Starting Bruteforce on '{username}' (difficulty: {difficulty}, max_attempts: {max_attempts or 'unlimited'})..."
+            f"Starting Bruteforce on '{username}' (difficulty: {difficulty}, max_attempts: {max_attempts_str}, max_time: {max_time_str})..."
         )
 
         metrics.start()
         found_password = None
         i = 0
+        start_time = time.time()
 
         for password in password_generator.generate_bruteforce():
+            if max_time is not None:
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= max_time:
+                    print(f"Time limit reached ({max_time}s) after {i} attempts")
+                    break
             i += 1
             start = time.time()
 

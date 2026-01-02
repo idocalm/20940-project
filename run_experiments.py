@@ -107,7 +107,7 @@ def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager)
     """Save logs and config for a testcase to results/{testcase_name}/"""
     results_dir = Path("results") / testcase.name
     results_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Save config
     try:
         response = requests.get(f"{BASE_URL}/admin/config", timeout=5)
@@ -119,7 +119,7 @@ def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager)
             print(f"Saved config to {config_file}")
     except Exception as e:
         print(f"Warning: Could not save config: {e}")
-    
+
     # Copy requests.log from server folder
     requests_log_src = Path("server/requests.log")
     if requests_log_src.exists():
@@ -129,7 +129,7 @@ def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager)
             print(f"Saved requests.log to {requests_log_dst}")
         except Exception as e:
             print(f"Warning: Could not copy requests.log: {e}")
-    
+
     # Copy attempts.log from root folder
     attempts_log_src = Path("attempts.log")
     if attempts_log_src.exists():
@@ -165,7 +165,7 @@ def run_testcase(
             requests_log.write_text("")  # Clear the log file
         if attempts_log.exists():
             attempts_log.write_text("")  # Clear the log file
-        
+
         # Update server configuration
         config_mgr = ServerConfigManager()
         # Reset to defaults and apply testcase config in one operation
@@ -203,6 +203,7 @@ def run_testcase(
                 metrics=metrics,
                 delay=testcase.delay,
                 max_attempts=testcase.max_attempts,
+                max_time=testcase.max_time,
             )
 
             # Save report
@@ -212,7 +213,7 @@ def run_testcase(
             print(f"   - Time: {report['total_time_seconds']}s")
             print(f"   - Speed: {report['attempts_per_second']} att/s")
             print(f"   - Found: {'Yes' if found else 'No'}")
-            
+
             # Save testcase artifacts (logs and config)
             save_testcase_artifacts(testcase, config_mgr)
 
@@ -235,6 +236,7 @@ def run_testcase(
                 password_list=passwords,
                 metrics=metrics,
                 delay=testcase.delay,
+                max_time=testcase.max_time,
             )
 
             # Save report
@@ -248,7 +250,7 @@ def run_testcase(
             print(
                 f"   - Accounts compromised: {len(found_credentials)}/{len(usernames)}"
             )
-            
+
             # Save testcase artifacts (logs and config)
             save_testcase_artifacts(testcase, config_mgr)
 
@@ -271,31 +273,35 @@ def run_testcase(
 def define_testcases() -> List[TestCase]:
     """Define all testcases to run"""
 
-    testcases = [
-        TestCase(
-            name="bruteforce_easy_sha256_no_protections",
-            testcase_type="bruteforce",
-            difficulty="easy",
-            hash_mode="sha256",
-            server_config={
-                "hash_mode": "sha256",
-                "bcrypt_cost": 12,
-                "pepper_enabled": False,
-                "pepper": b"",
-                "captcha_enabled": False,
-                "captcha_after_fails": 5,
-                "lockout_enabled": False,
-                "lockout_threshold": 10,
-                "lockout_time": 300,
-                "rate_limit_enabled": False,
-                "rate_limit_window": 60,
-                "rate_limit_max": 30,
-                "totp_enabled": False,
-            },
-            delay=0.01,
-            max_attempts=50000,
-        )
-    ]
+    MAX_ATTEMPTS = 100000
+    MAX_TIME = 4 * 60 * 60
+
+    bf_sha256_baseline = TestCase(
+        name="bf_sha256_baseline",
+        testcase_type="bruteforce",
+        difficulty="easy",
+        hash_mode="sha256",
+        server_config={
+            "hash_mode": "sha256",
+            "bcrypt_cost": 12,
+            "pepper_enabled": False,
+            "pepper": b"",
+            "captcha_enabled": False,
+            "captcha_after_fails": 5,
+            "lockout_enabled": False,
+            "lockout_threshold": 10,
+            "lockout_time": 300,
+            "rate_limit_enabled": False,
+            "rate_limit_window": 60,
+            "rate_limit_max": 30,
+            "totp_enabled": False,
+        },
+        delay=0.01,
+        max_attempts=MAX_ATTEMPTS,
+        max_time=MAX_TIME,
+    )
+
+    testcases = [bf_sha256_baseline]
 
     return testcases
 
@@ -317,6 +323,8 @@ def main():
     if SERVER_PROCESS is None:
         pass
 
+    all_reports = []
+    
     try:
         for i, testcase in enumerate(testcases, 1):
             print(f"\n[{i}/{len(testcases)}] Running testcase: {testcase.name}")
