@@ -10,22 +10,38 @@ class AttackMetrics:
         self.experiment_name = experiment_name
         self.start_time = None
         self.end_time = None
+
+        self.attempts = 0
+        self.successful_attempts = 0
+        self.failed_attempts = 0
+
+        self.latencies = []
+        self.breach_time = None
+        self.breached = False
+
+        self.cpu_samples = []
+        self.cpu_samples_normalized = []
+        self.memory_samples = []
+
+        self.process = psutil.Process()
+        self.cpu_cores = psutil.cpu_count(logical=True)
+
+    def start(self):
+        self.start_time = time.time()
+
         self.attempts = 0
         self.successful_attempts = 0
         self.failed_attempts = 0
         self.latencies = []
         self.breach_time = None
         self.breached = False
-        self.cpu_samples = []
-        self.memory_samples = []
-        self.process = psutil.Process()
 
-    def start(self):
-        self.start_time = time.time()
-        self.attempts = 0
-        self.successful_attempts = 0
-        self.failed_attempts = 0
-        self.latencies = []
+        self.cpu_samples = []
+        self.cpu_samples_normalized = []
+        self.memory_samples = []
+
+        # PRIME CPU measurement (critical)
+        self.process.cpu_percent(None)
 
     def record_attempt(self, success, latency_ms):
         self.attempts += 1
@@ -41,11 +57,16 @@ class AttackMetrics:
 
     def sample_resources(self):
         try:
-            self.cpu_samples.append(self.process.cpu_percent())
-            self.memory_samples.append(
-                self.process.memory_info().rss / 1024 / 1024
-            )  # MB
-        except:
+            cpu = self.process.cpu_percent(None)
+            cpu_norm = cpu * self.cpu_cores
+
+            mem = self.process.memory_info().rss / 1024 / 1024
+
+            self.cpu_samples.append(cpu)
+            self.cpu_samples_normalized.append(cpu_norm)
+            self.memory_samples.append(mem)
+
+        except psutil.Error:
             pass
 
     def stop(self):
@@ -84,19 +105,33 @@ class AttackMetrics:
                 if self.cpu_samples
                 else 0
             ),
+            "avg_cpu_percent_normalized": (
+                round(
+                    sum(self.cpu_samples_normalized) / len(self.cpu_samples_normalized),
+                    2,
+                )
+                if self.cpu_samples_normalized
+                else 0
+            ),
             "avg_memory_mb": (
                 round(sum(self.memory_samples) / len(self.memory_samples), 2)
                 if self.memory_samples
                 else 0
             ),
+            "cpu_cores": self.cpu_cores,
             "breached": self.breached,
         }
 
     def save_report(self, output_dir="results"):
         Path(output_dir).mkdir(exist_ok=True)
-        report = self.get_report()
 
-        filename = f"{output_dir}/{self.experiment_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        report = self.get_report()
+        filename = (
+            f"{output_dir}/"
+            f"{self.experiment_name}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+
         with open(filename, "w") as f:
             json.dump(report, f, indent=2)
 

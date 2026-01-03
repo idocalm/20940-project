@@ -15,13 +15,13 @@ class PasswordGenerator:
 
     DIFFICULTY_CONFIG = {
         "easy": {
-            "min_length": 3,
-            "max_length": 4,
+            "min_length": 4,
+            "max_length": 6,
             "charset": EASY_CHARSET,
         },
         "medium": {
-            "min_length": 5,
-            "max_length": 6,
+            "min_length": 7,
+            "max_length": 8,
             "charset": ALPHANUMERIC,
         },
         "hard": {
@@ -46,11 +46,6 @@ class PasswordGenerator:
         self.attempts = 0
 
     def generate_bruteforce(self) -> Iterator[str]:
-        """
-        - Easy: 3-4 chars from "abcd0123"
-        - Medium: 5-6 chars from full alphanumeric
-        - Hard: 8-10 chars from full alphanumeric
-        """
         min_length = self.config["min_length"]
         max_length = self.config["max_length"]
         charset = self.config["charset"]

@@ -14,6 +14,7 @@ class TestCase:
     max_attempts: Optional[int] = None  # None means try entire solution space
     max_time: Optional[float] = None  # None means no time limit, value in seconds
     delay: float = 0.01  # Delay between attempts in seconds
+    password_index: int = 0  # Index of password to use for bruteforce testcases (0-based)
 
     def __post_init__(self):
         """Set default server config if not provided"""

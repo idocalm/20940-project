@@ -188,17 +188,24 @@ def run_testcase(
 
         if testcase.testcase_type == "bruteforce":
             passwords = load_passwords(testcase.difficulty)
-            target_password = passwords[0]  # TODO: Which one?
+            
+            if testcase.password_index < 0 or testcase.password_index >= len(passwords):
+                raise ValueError(f"Invalid password_index: {testcase.password_index}.")
+            
+            target_password = passwords[testcase.password_index]
+            target_username = testcase.name
+            print(f"Using password at index {testcase.password_index}: '{target_password}'")
+            print(f"Using username: '{target_username}'")
 
-            if not register_test_user(TARGET_USERNAME, target_password):
+            if not register_test_user(target_username, target_password):
                 print(
-                    f"Warning: Could not register user '{TARGET_USERNAME}', may already exist"
+                    f"Warning: Could not register user '{target_username}', may already exist"
                 )
 
             # Run bruteforce attack
             attacker = BruteforceAttack(BASE_URL)
             found = attacker.attack(
-                username=TARGET_USERNAME,
+                username=target_username,
                 difficulty=testcase.difficulty,
                 metrics=metrics,
                 delay=testcase.delay,
@@ -276,32 +283,37 @@ def define_testcases() -> List[TestCase]:
     MAX_ATTEMPTS = 100000
     MAX_TIME = 4 * 60 * 60
 
-    bf_sha256_baseline = TestCase(
-        name="bf_sha256_baseline",
-        testcase_type="bruteforce",
-        difficulty="easy",
-        hash_mode="sha256",
-        server_config={
-            "hash_mode": "sha256",
-            "bcrypt_cost": 12,
-            "pepper_enabled": False,
-            "pepper": b"",
-            "captcha_enabled": False,
-            "captcha_after_fails": 5,
-            "lockout_enabled": False,
-            "lockout_threshold": 10,
-            "lockout_time": 300,
-            "rate_limit_enabled": False,
-            "rate_limit_window": 60,
-            "rate_limit_max": 30,
-            "totp_enabled": False,
-        },
-        delay=0.01,
-        max_attempts=MAX_ATTEMPTS,
-        max_time=MAX_TIME,
-    )
+    BF_PASSWORD_INDEXES = [0, 1, 2]
 
-    testcases = [bf_sha256_baseline]
+    testcases = []
+
+    for password_index in BF_PASSWORD_INDEXES:
+        testcases.append(TestCase(
+            name=f"bf_sha256_baseline_{password_index}",
+            testcase_type="bruteforce",
+            difficulty="easy",
+            hash_mode="sha256",
+            password_index=password_index,
+            server_config={
+                "hash_mode": "sha256",
+                "bcrypt_cost": 12,
+                "pepper_enabled": False,
+                "pepper": b"",
+                "captcha_enabled": False,
+                "captcha_after_fails": 5,
+                "lockout_enabled": False,
+                "lockout_threshold": 10,
+                "lockout_time": 300,
+                "rate_limit_enabled": False,
+                "rate_limit_window": 60,
+                "rate_limit_max": 30,
+                "totp_enabled": False,
+            },
+            delay=0.01,
+            max_attempts=MAX_ATTEMPTS,
+            max_time=MAX_TIME,
+        )
+    )
 
     return testcases
 

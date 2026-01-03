@@ -89,6 +89,9 @@ class BruteforceAttack:
                 print(f"Error: {e}")
                 metrics.record_attempt(False, 0)
 
+            if i % 10 == 0:
+                metrics.sample_resources()
+
             if delay > 0:
                 time.sleep(delay)
 
