@@ -1,18 +1,19 @@
 import time
 import json
 import hashlib
-import hmac
+import secrets
 from collections import defaultdict, deque
 
 from passlib.hash import bcrypt, argon2
 import pyotp
 
-from config import SETTINGS, ATTEMPTS_LOG, failed_counts, lockouts
+from config import SETTINGS, ATTEMPTS_LOG, failed_counts, lockouts, captcha_counters
 
 rate_limited = defaultdict(deque)
+captcha_tokens = {}
 
 
-def log_attempt(entry):
+def log_attempt(entry, username):
     def normalize(obj):
         if isinstance(obj, bytes):
             return obj.hex()
@@ -23,6 +24,11 @@ def log_attempt(entry):
         return obj
 
     entry = normalize(entry)
+
+    if username in captcha_counters:
+        captcha_counters[username] += 1
+    else:
+        captcha_counters[username] = 1
 
     with open(ATTEMPTS_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
@@ -70,6 +76,13 @@ def verify_password(user, password):
 
 
 def is_rate_limited(key):
+    """
+    Check if a key (username) is rate limited.
+
+    Returns:
+        False if not rate limited
+        float: seconds until the oldest request expires (if rate limited)
+    """
     if not SETTINGS["rate_limit_enabled"]:
         return False
 
@@ -79,7 +92,11 @@ def is_rate_limited(key):
         q.popleft()
 
     if len(q) >= SETTINGS["rate_limit_max"]:
-        return True
+        # Calculate time until oldest request expires
+        oldest_request_time = q[0]
+        expire_time = oldest_request_time + SETTINGS["rate_limit_window"]
+        retry_after = max(0, expire_time - now)
+        return retry_after
 
     q.append(now)
     return False
@@ -92,20 +109,20 @@ def record_failure(username):
         SETTINGS["lockout_enabled"]
         and failed_counts[username] >= SETTINGS["lockout_threshold"]
     ):
-        lockouts[username] = time.time() + SETTINGS["lockout_time"]
+        lockouts[username] = True
 
 
 def locked_out(username):
     if not SETTINGS["lockout_enabled"]:
         return False
-    until = lockouts.get(username)
-    return until is not None and time.time() < until
+    lockout = lockouts.get(username)
+    return lockout is not None
 
 
 def needs_captcha(username):
     return (
         SETTINGS["captcha_enabled"]
-        and failed_counts[username] >= SETTINGS["captcha_after_fails"]
+        and captcha_counters[username] % SETTINGS["captcha_after_fails"] == 0
     )
 
 
@@ -116,7 +133,25 @@ def verify_totp(user, token):
     return totp.verify(token, valid_window=1)
 
 
-def captcha_token(group_seed):
-    return hmac.new(
-        SETTINGS["pepper"], msg=group_seed.encode(), digestmod=hashlib.sha256
-    ).hexdigest()
+def generate_captcha_token():
+    """Generate a unique CAPTCHA token valid for captcha_after_fails attempts"""
+    # Generate a unique random token
+    token = secrets.token_hex(32)
+    captcha_tokens[token] = SETTINGS["captcha_after_fails"]
+    return token
+
+
+def validate_captcha_token(token):
+    """Validate a CAPTCHA token and decrement remaining attempts"""
+    if not token:
+        return False
+
+    if token not in captcha_tokens:
+        return False
+
+    captcha_tokens[token] -= 1
+
+    if captcha_tokens[token] <= 0:
+        del captcha_tokens[token]
+        return True
+    return True

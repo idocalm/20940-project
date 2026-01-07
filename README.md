@@ -85,7 +85,6 @@ SETTINGS = {
     "captcha_after_fails": 5,        # Failures before CAPTCHA
     "lockout_enabled": False,        # Enable account lockout
     "lockout_threshold": 10,         # Failures before lockout
-    "lockout_time": 300,             # Lockout duration (seconds)
     "rate_limit_enabled": False,     # Enable rate limiting
     "rate_limit_window": 60,         # Rate limit window (seconds)
     "rate_limit_max": 30,            # Max requests per window

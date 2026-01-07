@@ -6,4 +6,3 @@ pyotp>=2.9
 passlib
 requests>=2.31
 psutil>=5.9
-pandas

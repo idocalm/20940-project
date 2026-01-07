@@ -40,7 +40,6 @@ class AttackMetrics:
         self.cpu_samples_normalized = []
         self.memory_samples = []
 
-        # PRIME CPU measurement (critical)
         self.process.cpu_percent(None)
 
     def record_attempt(self, success, latency_ms):

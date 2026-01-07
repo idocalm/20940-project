@@ -1,9 +1,15 @@
 import time
 import json
 import logging
+import sys
+import os
 from flask import Flask, request, jsonify
 
 from storage import Database
+import config
+
+config.ATTEMPTS_LOG = os.environ.get("ATTEMPTS_LOG", "attempts.log")
+
 from utils import (
     hash_password,
     verify_password,
@@ -13,7 +19,8 @@ from utils import (
     is_rate_limited,
     locked_out,
     needs_captcha,
-    captcha_token,
+    generate_captcha_token,
+    validate_captcha_token,
 )
 from config import SETTINGS, failed_counts, GROUP_SEED
 import pyotp
@@ -21,11 +28,13 @@ import pyotp
 app = Flask(__name__)
 db = Database()
 
+requests_log_path = os.environ.get("REQUESTS_LOG", "server/requests.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("server/requests.log"),
+        logging.FileHandler(requests_log_path),
     ],
 )
 request_logger = logging.getLogger("requests")
@@ -94,16 +103,12 @@ def register():
     data = request.json
     username = data["username"]
     password = data["password"]
-    totp = data.get("totp", False)
+    totp_secret = data.get("totp_secret", None)
 
     if db.user_exists(username):
         return jsonify({"error": "user exists"}), 400
 
     user = hash_password(username, password)
-
-    totp_secret = None
-    if SETTINGS["totp_enabled"] and totp:
-        totp_secret = pyotp.random_base32()
 
     db.save_user(
         username=username,
@@ -121,12 +126,25 @@ def login():
     data = request.json
     username = data["username"]
     password = data["password"]
+    captcha_token_provided = data.get("captcha_token")
 
-    if is_rate_limited(request.remote_addr):  # TODO: by username
-        return jsonify({"error": "rate_limited"}), 429
+    rate_limit_result = is_rate_limited(username)
+    if rate_limit_result:
+        retry_after = int(rate_limit_result) + 1  # Add 1 second buffer, round up
+        response = jsonify({"error": "rate_limited"})
+        response.headers["Retry-After"] = str(retry_after)
+        return response, 429
 
     if locked_out(username):
         return jsonify({"error": "locked"}), 403
+
+    if needs_captcha(username):
+        request_logger.info("needs captcha")
+        if not captcha_token_provided:
+            return jsonify({"captcha_required": True}), 403
+
+    if captcha_token_provided and not validate_captcha_token(captcha_token_provided):
+        return jsonify({"error": "invalid_captcha"}), 403
 
     user = db.get_user(username)
     success = False
@@ -149,11 +167,9 @@ def login():
             "result": reason,
             "latency_ms": int((time.time() - start) * 1000),
             "settings": SETTINGS,
-        }
+        },
+        username,
     )
-
-    if needs_captcha(username):
-        return jsonify({"captcha_required": True}), 403
 
     if reason == "totp_required":
         return jsonify({"totp_required": True}), 401
@@ -185,8 +201,10 @@ def get_captcha():
     if not seed:
         return jsonify({"error": "missing group_seed"}), 400
 
-    if seed == GROUP_SEED:
-        return jsonify({"token": captcha_token(seed)})
+    if seed == str(GROUP_SEED):
+        # Generate a unique CAPTCHA token valid for captcha_after_fails attempts
+        token = generate_captcha_token()
+        return jsonify({"token": token})
 
     return jsonify({"error": "incorrect group_seed"}), 400
 
@@ -235,4 +253,10 @@ def get_config():
 
 
 if __name__ == "__main__":
-    app.run("127.0.0.1", 5000, debug=False)
+    port = 5000
+    if len(sys.argv) > 1:
+        try:
+            port = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid port: {sys.argv[1]}, using default 5000")
+    app.run("127.0.0.1", port, debug=False)

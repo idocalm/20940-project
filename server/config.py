@@ -22,3 +22,4 @@ GROUP_SEED = 331771535 ^ 338054042
 
 failed_counts = defaultdict(int)
 lockouts = {}
+captcha_counters = defaultdict(int)

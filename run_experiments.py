@@ -4,6 +4,8 @@ import subprocess
 import signal
 import json
 import shutil
+import socket
+import os
 from pathlib import Path
 from typing import List, Optional
 import requests
@@ -14,14 +16,34 @@ from attacks.password_spray import PasswordSprayAttack
 from attacks.metrics import AttackMetrics
 from attacks.config_manager import ServerConfigManager
 
-# Configuration
-BASE_URL = "http://127.0.0.1:5000"
 PASSWORDS_DIR = Path("passwords")
-TARGET_USERNAME = "testuser"  # For bruteforce
 SERVER_PROCESS: Optional[subprocess.Popen] = None
 
 
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
+
 def load_passwords(difficulty: str) -> List[str]:
+    difficulties = ["easy", "medium", "hard"]
+
+    if difficulty == "all":
+        ret_value = []
+        for diff in difficulties:
+            path = PASSWORDS_DIR / f"{diff}_passwords.txt"
+            if not path.exists():
+                continue
+            with open(path, "r") as f:
+                result = [line.strip() for line in f if line.strip()]
+                ret_value.extend(result)
+
+        print(f"Loaded with 'all' #{len(ret_value)} passwords.")
+        return ret_value
+
     """Loads the password list for a given difficulty"""
     file_path = PASSWORDS_DIR / f"{difficulty}_passwords.txt"
     if not file_path.exists():
@@ -30,14 +52,37 @@ def load_passwords(difficulty: str) -> List[str]:
         return [line.strip() for line in f if line.strip()]
 
 
-def register_test_user(username: str, password: str) -> bool:
+# The sprayer uses the top 10k most used passwords
+def load_spray_passwords() -> List[str]:
+    file_path = PASSWORDS_DIR / "spray_passwords.txt"
+    if not file_path.exists():
+        raise FileNotFoundError(f"Password file not found: {file_path}")
+    with open(file_path, "r") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def register_test_user(
+    username: str, password: str, base_url: str, totp_secret=None
+) -> bool:
     """Registers a test user"""
     try:
-        response = requests.post(
-            f"{BASE_URL}/register",
-            json={"username": username, "password": password, "totp": False},
-            timeout=10,
-        )
+        if totp_secret:
+            print("Registering user with TOTP")
+            response = requests.post(
+                f"{base_url}/register",
+                json={
+                    "username": username,
+                    "password": password,
+                    "totp_secret": totp_secret,
+                },
+                timeout=10,
+            )
+        else:
+            response = requests.post(
+                f"{base_url}/register",
+                json={"username": username, "password": password},
+                timeout=10,
+            )
         if response.status_code == 200:
             print(f"User '{username}' created")
             return True
@@ -52,12 +97,24 @@ def register_test_user(username: str, password: str) -> bool:
         return False
 
 
-def start_server() -> Optional[subprocess.Popen]:
-    """Starts the Flask server"""
+def start_server(port: int) -> Optional[subprocess.Popen]:
+    """Starts the Flask server on the given port with port-specific log files"""
+    base_url = f"http://127.0.0.1:{port}"
 
-    print("Starting server...")
+    requests_log_path = f"server/requests_{port}.log"
+    attempts_log_path = f"attempts_{port}.log"
+
+    env = os.environ.copy()
+    env["REQUESTS_LOG"] = requests_log_path
+    env["ATTEMPTS_LOG"] = attempts_log_path
+
+    print(f"Starting server on port {port}...")
+    print(f"  Requests log: {requests_log_path}")
+    print(f"  Attempts log: {attempts_log_path}")
+
     process = subprocess.Popen(
-        [sys.executable, "server/server.py"],
+        [sys.executable, "server/server.py", str(port)],
+        env=env,
     )
 
     max_retries = 30
@@ -65,13 +122,13 @@ def start_server() -> Optional[subprocess.Popen]:
         try:
             time.sleep(1)
             response = requests.get(
-                f"{BASE_URL}/admin/captcha_token?group_seed=test", timeout=2
+                f"{base_url}/admin/captcha_token?group_seed=test", timeout=2
             )
-            print("Server started successfully")
+            print(f"Server started successfully on port {port}")
             return process
         except:
             if i == max_retries - 1:
-                print("ERROR: Server failed to start")
+                print(f"ERROR: Server failed to start on port {port}")
                 process.terminate()
                 return None
             continue
@@ -103,14 +160,15 @@ def setup_signal_handlers(process: Optional[subprocess.Popen]):
     signal.signal(signal.SIGTERM, signal_handler)
 
 
-def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager):
+def save_testcase_artifacts(
+    testcase: TestCase, config_mgr: ServerConfigManager, base_url: str, port: int
+):
     """Save logs and config for a testcase to results/{testcase_name}/"""
     results_dir = Path("results") / testcase.name
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save config
     try:
-        response = requests.get(f"{BASE_URL}/admin/config", timeout=5)
+        response = requests.get(f"{base_url}/admin/config", timeout=5)
         if response.status_code == 200:
             config_data = response.json().get("settings", {})
             config_file = results_dir / "config.json"
@@ -120,8 +178,7 @@ def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager)
     except Exception as e:
         print(f"Warning: Could not save config: {e}")
 
-    # Copy requests.log from server folder
-    requests_log_src = Path("server/requests.log")
+    requests_log_src = Path(f"server/requests_{port}.log")
     if requests_log_src.exists():
         requests_log_dst = results_dir / "requests.log"
         try:
@@ -130,8 +187,7 @@ def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager)
         except Exception as e:
             print(f"Warning: Could not copy requests.log: {e}")
 
-    # Copy attempts.log from root folder
-    attempts_log_src = Path("attempts.log")
+    attempts_log_src = Path(f"attempts_{port}.log")
     if attempts_log_src.exists():
         attempts_log_dst = results_dir / "attempts.log"
         try:
@@ -142,7 +198,10 @@ def save_testcase_artifacts(testcase: TestCase, config_mgr: ServerConfigManager)
 
 
 def run_testcase(
-    testcase: TestCase, server_process: Optional[subprocess.Popen]
+    testcase: TestCase,
+    server_process: Optional[subprocess.Popen],
+    base_url: str,
+    port: int,
 ) -> Optional[dict]:
     """
     Runs a single testcase
@@ -159,16 +218,14 @@ def run_testcase(
 
     try:
         # Clear logs before starting testcase
-        requests_log = Path("server/requests.log")
-        attempts_log = Path("attempts.log")
-        if requests_log.exists():
-            requests_log.write_text("")  # Clear the log file
+        requests_log = Path(f"server/requests_{port}.log")
+        attempts_log = Path(f"attempts_{port}.log")
+        if requests_log.exists():  # Clear the log file
+            requests_log.write_text("")
         if attempts_log.exists():
-            attempts_log.write_text("")  # Clear the log file
+            attempts_log.write_text("")
 
-        # Update server configuration
-        config_mgr = ServerConfigManager()
-        # Reset to defaults and apply testcase config in one operation
+        config_mgr = ServerConfigManager(base_url=base_url)
         default_reset = {
             "pepper_enabled": False,
             "captcha_enabled": False,
@@ -176,7 +233,6 @@ def run_testcase(
             "rate_limit_enabled": False,
             "totp_enabled": False,
         }
-        # Merge defaults with testcase config
         merged_config = {**default_reset, **testcase.server_config}
         config_mgr.update_config(config_dict=merged_config)
 
@@ -188,22 +244,28 @@ def run_testcase(
 
         if testcase.testcase_type == "bruteforce":
             passwords = load_passwords(testcase.difficulty)
-            
+
             if testcase.password_index < 0 or testcase.password_index >= len(passwords):
                 raise ValueError(f"Invalid password_index: {testcase.password_index}.")
-            
+
             target_password = passwords[testcase.password_index]
             target_username = testcase.name
-            print(f"Using password at index {testcase.password_index}: '{target_password}'")
+            target_totp_secret = testcase.totp_secret
+            print(
+                f"Using password at index {testcase.password_index}: '{target_password}'"
+            )
             print(f"Using username: '{target_username}'")
 
-            if not register_test_user(target_username, target_password):
+            if not register_test_user(
+                target_username, target_password, base_url, target_totp_secret
+            ):
                 print(
                     f"Warning: Could not register user '{target_username}', may already exist"
                 )
 
             # Run bruteforce attack
-            attacker = BruteforceAttack(BASE_URL)
+            GROUP_SEED = 331771535 ^ 338054042
+            attacker = BruteforceAttack(base_url, group_seed=GROUP_SEED)
             found = attacker.attack(
                 username=target_username,
                 difficulty=testcase.difficulty,
@@ -211,6 +273,7 @@ def run_testcase(
                 delay=testcase.delay,
                 max_attempts=testcase.max_attempts,
                 max_time=testcase.max_time,
+                run_until_worst=testcase.run_until_worst,
             )
 
             # Save report
@@ -221,32 +284,31 @@ def run_testcase(
             print(f"   - Speed: {report['attempts_per_second']} att/s")
             print(f"   - Found: {'Yes' if found else 'No'}")
 
-            # Save testcase artifacts (logs and config)
-            save_testcase_artifacts(testcase, config_mgr)
+            save_testcase_artifacts(testcase, config_mgr, base_url, port)
 
             return report
 
         elif testcase.testcase_type == "password_spray":
             passwords = load_passwords(testcase.difficulty)
+            sprayer_passwords = load_spray_passwords()
+            num_users = len(passwords)
 
-            num_users = min(5, len(passwords))  # TODO: Why 5?
             usernames = []
             for i in range(num_users):
                 username = f"user_{testcase.difficulty}_{i}"
                 usernames.append(username)
-                register_test_user(username, passwords[i])
+                register_test_user(username, passwords[i], base_url)
 
-            # Run password spray attack
-            attacker = PasswordSprayAttack(BASE_URL)
+            GROUP_SEED = 331771535 ^ 338054042
+            attacker = PasswordSprayAttack(base_url, group_seed=GROUP_SEED)
             found_credentials = attacker.attack(
                 usernames=usernames,
-                password_list=passwords,
+                password_list=sprayer_passwords,
                 metrics=metrics,
                 delay=testcase.delay,
                 max_time=testcase.max_time,
             )
 
-            # Save report
             report = metrics.save_report()
             report["accounts_compromised"] = len(found_credentials)
             report["total_accounts"] = len(usernames)
@@ -258,8 +320,7 @@ def run_testcase(
                 f"   - Accounts compromised: {len(found_credentials)}/{len(usernames)}"
             )
 
-            # Save testcase artifacts (logs and config)
-            save_testcase_artifacts(testcase, config_mgr)
+            save_testcase_artifacts(testcase, config_mgr, base_url, port)
 
             return report
         else:
@@ -280,20 +341,16 @@ def run_testcase(
 def define_testcases() -> List[TestCase]:
     """Define all testcases to run"""
 
-    MAX_ATTEMPTS = 100000
-    MAX_TIME = 4 * 60 * 60
+    MAX_ATTEMPTS = 1000000
+    MAX_TIME = 2 * 60 * 60
 
-    BF_PASSWORD_INDEXES = [0, 1, 2]
-
-    testcases = []
-
-    for password_index in BF_PASSWORD_INDEXES:
-        testcases.append(TestCase(
-            name=f"bf_sha256_baseline_{password_index}",
-            testcase_type="bruteforce",
-            difficulty="easy",
+    testcases = [
+        TestCase(
+            name=f"pass_spray_sha256_baseline",
+            testcase_type="password_spray",
+            difficulty="all",
             hash_mode="sha256",
-            password_index=password_index,
+            password_index=0,
             server_config={
                 "hash_mode": "sha256",
                 "bcrypt_cost": 12,
@@ -302,8 +359,7 @@ def define_testcases() -> List[TestCase]:
                 "captcha_enabled": False,
                 "captcha_after_fails": 5,
                 "lockout_enabled": False,
-                "lockout_threshold": 10,
-                "lockout_time": 300,
+                "lockout_threshold": 1000,
                 "rate_limit_enabled": False,
                 "rate_limit_window": 60,
                 "rate_limit_max": 30,
@@ -312,14 +368,14 @@ def define_testcases() -> List[TestCase]:
             delay=0.01,
             max_attempts=MAX_ATTEMPTS,
             max_time=MAX_TIME,
-        )
-    )
+            run_until_worst=False,
+        ),
+    ]
 
     return testcases
 
 
 def main():
-    """Runs all testcases sequentially with smart error detection"""
     global SERVER_PROCESS
 
     print("=" * 60)
@@ -329,22 +385,26 @@ def main():
     testcases = define_testcases()
     print(f"\nDefined {len(testcases)} testcases")
 
-    SERVER_PROCESS = start_server()
+    port = find_free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    print(f"\nUsing port {port} (base_url: {base_url})")
+
+    SERVER_PROCESS = start_server(port)
     setup_signal_handlers(SERVER_PROCESS)
 
     if SERVER_PROCESS is None:
-        pass
+        print("ERROR: Failed to start server")
+        return
 
     all_reports = []
-    
+
     try:
         for i, testcase in enumerate(testcases, 1):
             print(f"\n[{i}/{len(testcases)}] Running testcase: {testcase.name}")
 
-            report = run_testcase(testcase, SERVER_PROCESS)
+            report = run_testcase(testcase, SERVER_PROCESS, base_url, port)
 
             if report is None:
-                # Fatal error occurred
                 error_msg = f"Fatal error in testcase '{testcase.name}'"
                 print(f"ERROR: {error_msg}")
 
